@@ -28,7 +28,7 @@ local has_singbox = api.finded_com("sing-box")
 local has_xray = api.finded_com("xray")
 local has_hysteria2 = api.finded_com("hysteria")
 local allowInsecure_default = true
--- 取节点使用core类型（节点订阅页面未设置时，自动取默认）
+-- Use nodescoretype（When the node subscription page is not set，Automatically take the default）
 local function get_core(field, candidates)
 	local v = uci:get(appname, "@global_subscribe[0]", field)
 	if not v or v == "" then

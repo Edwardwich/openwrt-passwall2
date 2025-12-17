@@ -423,8 +423,8 @@ local function get_subscribe_info(cfgid, value)
 		return
 	end
 	value = value:gsub("%s+", "")
-	local expired_date = value:match("套餐到期：(.+)")
-	local rem_traffic = value:match("剩余流量：(.+)")
+	local expired_date = value:match("Package expires：(.+)")
+	local rem_traffic = value:match("remaining traffic：(.+)")
 	subscribe_info[cfgid] = subscribe_info[cfgid] or {expired_date = "", rem_traffic = ""}
 	if expired_date then
 		subscribe_info[cfgid]["expired_date"] = expired_date

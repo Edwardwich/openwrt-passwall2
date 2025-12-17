@@ -51,6 +51,11 @@ if api.is_js_luci() then
 	end
 end
 
+m.render = function(self, ...)
+	Map.render(self, ...)
+	api.optimize_cbi_ui()
+end
+
 -- [[ Subscribe Settings ]]--
 s = m:section(TypedSection, "global_subscribe", "")
 s.anonymous = true
@@ -119,6 +124,11 @@ if #hysteria2_type > 0 then
 	end
 end
 
+if #ss_type > 0 or #trojan_type > 0 or #vmess_type > 0 or #vless_type > 0 or #hysteria2_type > 0 then
+	o.description = string.format("<font color='red'>%s</font>",
+			translate("The configured type also applies to the core specified when manually importing nodes."))
+end
+
 o = s:option(ListValue, "domain_strategy", "Sing-box " .. translate("Domain Strategy"), translate("Set the default domain resolution strategy for the sing-box node."))
 o.default = ""
 o:value("", translate("Auto"))
@@ -136,15 +146,15 @@ function o.cfgvalue(self, section)
 		translate("Delete All Subscribe Node"))
 end
 
-o = s:option(Button, "_update", translate("Manual subscription All"))
-o.inputstyle = "apply"
-function o.write(t, n)
-	luci.sys.call("lua /usr/share/" .. appname .. "/subscribe.lua start > /dev/null 2>&1 &")
-	m.no_commit = true
-	luci.http.redirect(api.url("log"))
+o = s:option(DummyValue, "_update", translate("Manual subscription All"))
+o.rawhtml = true
+o.cfgvalue = function(self, section)
+    return string.format([[
+        <button type="button" class="cbi-button cbi-button-apply" onclick="ManualSubscribeAll()">%s</button>]],
+	 translate("Manual subscription All"))
 end
 
-s = m:section(TypedSection, "subscribe_list", "", "<font color='red'>" .. translate("Please input the subscription url first, save and submit before manual subscription.") .. "</font>")
+s = m:section(TypedSection, "subscribe_list", "", "<font color='red'>" .. translate("When adding a new subscription, please save and apply before manually subscribing. If you only change the subscription URL, you can subscribe manually, and the system will save it automatically.") .. "</font>")
 s.addremove = true
 s.anonymous = true
 s.sortable = true
@@ -158,19 +168,33 @@ end
 o = s:option(Value, "remark", translate("Remarks"))
 o.width = "auto"
 o.rmempty = false
-o.validate = function(self, value, t)
-	if value then
-		local count = 0
-		m.uci:foreach(appname, "subscribe_list", function(e)
-			if e[".name"] ~= t and e["remark"] == value then
-				count = count + 1
+o.validate = function(self, value, section)
+	value = api.trim(value)
+	if value == "" then
+		return nil, translate("Remark cannot be empty.")
+	end
+	local duplicate = false
+	m.uci:foreach(appname, "subscribe_list", function(e)
+		if e[".name"] ~= section and e["remark"] and e["remark"]:lower() == value:lower() then
+			duplicate = true
+			return false
+		end
+	end)
+	if duplicate or value:lower() == "default" then
+		return nil, translate("This remark already exists, please change a new remark.")
+	end
+	return value
+end
+o.write = function(self, section, value)
+	local old = m:get(section, self.option) or ""
+	if old ~= value then
+		m.uci:foreach(appname, "nodes", function(e)
+			if e["group"] and e["group"]:lower() == old:lower() then
+				m.uci:set(appname, e[".name"], "group", value)
 			end
 		end)
-		if count > 0 then
-			return nil, translate("This remark already exists, please change a new remark.")
-		end
-		return value
 	end
+	return Value.write(self, section, value)
 end
 
 o = s:option(DummyValue, "_node_count", translate("Subscribe Info"))
@@ -185,7 +209,7 @@ o.cfgvalue = function(t, n)
 	str = str ~= "" and "<br>" .. str or ""
 	local num = 0
 	m.uci:foreach(appname, "nodes", function(s)
-		if s["add_from"] ~= "" and s["add_from"] == remark then
+		if s["group"] and s["group"]:lower() == remark:lower() then
 			num = num + 1
 		end
 	end)
@@ -205,12 +229,12 @@ function o.cfgvalue(self, section)
 		remark, translate("Delete the subscribed node"))
 end
 
-o = s:option(Button, "_update", translate("Manual subscription"))
-o.inputstyle = "apply"
-function o.write(t, n)
-	luci.sys.call("lua /usr/share/" .. appname .. "/subscribe.lua start " .. n .. " > /dev/null 2>&1 &")
-	m.no_commit = true
-	luci.http.redirect(api.url("log"))
+o = s:option(DummyValue, "_update", translate("Manual subscription"))
+o.rawhtml = true
+o.cfgvalue = function(self, section)
+    return string.format([[
+        <button type="button" class="cbi-button cbi-button-apply" onclick="ManualSubscribe('%s')">%s</button>]],
+	section, translate("Manual subscription"))
 end
 
 s:append(Template(appname .. "/node_subscribe/js"))

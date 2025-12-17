@@ -24,9 +24,38 @@ UTIL_NAIVE=$LUA_UTIL_PATH/util_naiveproxy.lua
 UTIL_HYSTERIA2=$LUA_UTIL_PATH/util_hysteria2.lua
 UTIL_TUIC=$LUA_UTIL_PATH/util_tuic.lua
 
+i18n() {
+	echo "$(lua ${APP_PATH}/i18n.lua "$@")"
+}
+
 echolog() {
+	echo -e "$*" >>$LOG_FILE
+}
+
+echolog_date() {
 	local d="$(date "+%Y-%m-%d %H:%M:%S")"
-	echo -e "$d: $*" >>$LOG_FILE
+	echolog "$d: $*"
+}
+
+log() {
+	local num="$1"
+	shift
+	local content="$@"
+	local indent=""
+	if [ "$num" -ge 1 ]; then
+		for i in $(seq 1 ${num}); do
+			indent="${indent}  "
+		done
+		echolog_date "${indent}- ${content}"
+	else
+		echolog_date "${content}"
+	fi
+}
+
+log_i18n() {
+	local num="$1"
+	shift
+	log ${num} "$(i18n "$@")"
 }
 
 config_get_type() {
@@ -147,7 +176,7 @@ check_host() {
 	local f=${1}
 	a=$(echo $f | grep "\/")
 	[ -n "$a" ] && return 1
-	# 判断是否包含汉字~
+	# Determine if it contains Chinese characters.
 	local tmp=$(echo -n $f | awk '{print gensub(/[!-~]/,"","g",$0)}')
 	[ -n "$tmp" ] && return 1
 	return 0
@@ -216,11 +245,11 @@ check_depends() {
 	[ -d "/lib/apk/packages" ] && file_path="/lib/apk/packages" && file_ext=".list"
 	if [ "$tables" == "iptables" ]; then
 		for depends in "iptables-mod-tproxy" "iptables-mod-socket" "iptables-mod-iprange" "iptables-mod-conntrack-extra" "kmod-ipt-nat"; do
-			[ -s "${file_path}/${depends}${file_ext}" ] || echolog "$tables透明代理基础依赖 $depends 未安装..."
+			[ -s "${file_path}/${depends}${file_ext}" ] || log_i18n 0 "%s Transparent proxy base dependencies %s Not installed..." "${tables}" "${depends}"
 		done
 	else
 		for depends in "kmod-nft-socket" "kmod-nft-tproxy" "kmod-nft-nat"; do
-			[ -s "${file_path}/${depends}${file_ext}" ] || echolog "$tables透明代理基础依赖 $depends 未安装..."
+			[ -s "${file_path}/${depends}${file_ext}" ] || log_i18n 0 "%s Transparent proxy base dependencies %s Not installed..." "${tables}" "${depends}"
 		done
 	fi
 }
@@ -257,14 +286,14 @@ ln_run() {
 			ln -s "${file_func}" "${TMP_BIN_PATH}/${ln_name}" >/dev/null 2>&1
 			file_func="${TMP_BIN_PATH}/${ln_name}"
 		}
-		[ -x "${file_func}" ] || echolog "  - $(readlink ${file_func}) 没有执行权限，无法启动：${file_func} $*"
+		[ -x "${file_func}" ] || log 1 "$(i18n "%s does not have execute permissions and cannot be started: %s %s" "$(readlink ${file_func})" "${file_func}" "$*")"
 	fi
 	#echo "${file_func} $*" >&2
-	[ -n "${file_func}" ] || echolog "  - 找不到 ${ln_name}，无法启动..."
-	${file_func:-echolog "  - ${ln_name}"} "$@" >${output} 2>&1 &
+	[ -n "${file_func}" ] || log 1 "$(i18n "%s not found, unable to start..." "${ln_name}")"
+	${file_func:-log 1 "${ln_name}"} "$@" >${output} 2>&1 &
 	process_count=$(ls $TMP_SCRIPT_FUNC_PATH | grep -v "^_" | wc -l)
 	process_count=$((process_count + 1))
-	echo "${file_func:-echolog "  - ${ln_name}"} $@ >${output}" > $TMP_SCRIPT_FUNC_PATH/$process_count
+	echo "${file_func:-log 1 "${ln_name}"} $@ >${output}" > $TMP_SCRIPT_FUNC_PATH/$process_count
 }
 
 lua_api() {
@@ -297,11 +326,11 @@ get_singbox_geoip() {
 	local geoip_code="$1"
 	local geoip_path=$(config_t_get global_singbox geoip_path)
 	[ -e "$geoip_path" ] || { echo ""; return; }
-	local has_geoip_tools=$($(first_type $(config_t_get global_app singbox_file) sing-box) geoip | grep "GeoIP tools")
+	local has_geoip_tools=$($(first_type $(config_t_get global_app sing_box_file) sing-box) geoip | grep "GeoIP tools")
 	if [ -n "${has_geoip_tools}" ]; then
 		[ -f "${geoip_path}" ] && local geoip_md5=$(md5sum ${geoip_path} | awk '{print $1}')
 		local output_file="${TMP_PATH2}/geoip-${geoip_md5}-${geoip_code}.json"
-		[ ! -f ${output_file} ] && $(first_type $(config_t_get global_app singbox_file) sing-box) geoip -f "${geoip_path}" export "${geoip_code}" -o "${output_file}"
+		[ ! -f ${output_file} ] && $(first_type $(config_t_get global_app sing_box_file) sing-box) geoip -f "${geoip_path}" export "${geoip_code}" -o "${output_file}"
 		case "$2" in
 			ipv4)
 				cat ${output_file} | grep -E "([0-9]{1,3}[\.]){3}[0-9]{1,3}" | awk -F '"' '{print $2}' | sed -e "/^$/d"
@@ -334,6 +363,15 @@ get_cache_var() {
 
 eval_cache_var() {
 	[ -s "$TMP_PATH/var" ] && eval $(cat "$TMP_PATH/var")
+}
+
+has_1_65535() {
+	local val="$1"
+	val=${val//:/-}
+	case ",$val," in
+		*,1-65535,*) return 0 ;;
+		*) return 1 ;;
+	esac
 }
 
 run_xray() {
@@ -468,7 +506,7 @@ run_singbox() {
 	[ "$loglevel" = "warning" ] && loglevel="warn"
 	_extra_param="${_extra_param} -loglevel $loglevel"
 	
-	_extra_param="${_extra_param} -tags $($(first_type $(config_t_get global_app singbox_file) sing-box) version | grep 'Tags:' | awk '{print $2}')"
+	_extra_param="${_extra_param} -tags $($(first_type $(config_t_get global_app sing_box_file) sing-box) version | grep 'Tags:' | awk '{print $2}')"
 	
 	[ -n "$flag" ] && pgrep -af "$TMP_BIN_PATH" | awk -v P1="${flag}" 'BEGIN{IGNORECASE=1}$0~P1{print $1}' | xargs kill -9 >/dev/null 2>&1
 	[ -n "$flag" ] && _extra_param="${_extra_param} -flag $flag"
@@ -552,7 +590,7 @@ run_singbox() {
 	}
 
 	lua $UTIL_SINGBOX gen_config -node $node ${_extra_param} > $config_file
-	ln_run "$(first_type $(config_t_get global_app singbox_file) sing-box)" "sing-box" "${log_file}" run -c "$config_file"
+	ln_run "$(first_type $(config_t_get global_app sing_box_file) sing-box)" "sing-box" "${log_file}" run -c "$config_file"
 }
 
 run_socks() {
@@ -579,12 +617,12 @@ run_socks() {
 	if [ -n "$server_host" ] && [ -n "$server_port" ]; then
 		check_host $server_host
 		[ $? != 0 ] && {
-			echolog "  - Socks节点：[$remarks]${server_host} 是非法的服务器地址，无法启动！"
+			log 1 "$(i18n "Socks node: [%s]%s is an invalid server address and cannot be started!" "${$remarks}" "${server_host}")"
 			return 1
 		}
 		tmp="${server_host}:${server_port}"
 	else
-		error_msg="某种原因，此 Socks 服务的相关配置已失联，启动中止！"
+		error_msg="$(i18n "For some reason, the configuration for this Socks service has been lost, and its startup has been aborted!")"
 	fi
 
 	if [ "$type" == "sing-box" ] || [ "$type" == "xray" ]; then
@@ -595,16 +633,16 @@ run_socks() {
 	fi
 
 	[ -n "${error_msg}" ] && {
-		[ "$bind" != "127.0.0.1" ] && echolog "  - Socks节点：[$remarks]${tmp}，启动中止 ${bind}:${socks_port} ${error_msg}"
+		[ "$bind" != "127.0.0.1" ] && log 1 "$(i18n "Socks node: [%s]%s, start failed %s:%s %s" "${remarks}" "${tmp}" "${bind}" "${socks_port}" "${error_msg}")"
 		return 1
 	}
-	[ "$bind" != "127.0.0.1" ] && echolog "  - Socks节点：[$remarks]${tmp}，启动 ${bind}:${socks_port}"
+	[ "$bind" != "127.0.0.1" ] && log 1 "$(i18n "Socks node: [%s]%s, starting %s:%s" "${remarks}" "${tmp}" "${bind}" "${socks_port}")"
 
 	case "$type" in
 	sing-box)
 		[ "$http_port" != "0" ] && {
 			http_flag=1
-			config_file=$(echo $config_file | sed "s/SOCKS/HTTP_SOCKS/g")
+			config_file="${config_file//SOCKS/HTTP_SOCKS}"
 			local _extra_param="-local_http_address $bind -local_http_port $http_port"
 		}
 		[ -n "$relay_port" ] && _extra_param="${_extra_param} -server_host $server_host -server_port $server_port"
@@ -615,12 +653,12 @@ run_socks() {
 		}
 		[ -n "$no_run" ] && _extra_param="${_extra_param} -no_run 1"
 		lua $UTIL_SINGBOX gen_config -flag SOCKS_$flag -node $node -local_socks_address $bind -local_socks_port $socks_port ${_extra_param} > $config_file
-		[ -n "$no_run" ] || ln_run "$(first_type $(config_t_get global_app singbox_file) sing-box)" "sing-box" /dev/null run -c "$config_file"
+		[ -n "$no_run" ] || ln_run "$(first_type $(config_t_get global_app sing_box_file) sing-box)" "sing-box" /dev/null run -c "$config_file"
 	;;
 	xray)
 		[ "$http_port" != "0" ] && {
 			http_flag=1
-			config_file=$(echo $config_file | sed "s/SOCKS/HTTP_SOCKS/g")
+			config_file="${config_file//SOCKS/HTTP_SOCKS}"
 			local _extra_param="-local_http_address $bind -local_http_port $http_port"
 		}
 		[ -n "$relay_port" ] && _extra_param="${_extra_param} -server_host $server_host -server_port $server_port"
@@ -637,14 +675,23 @@ run_socks() {
 		[ -n "$no_run" ] || ln_run "$(first_type ssr-local)" "ssr-local" $log_file -c "$config_file" -v -u
 	;;
 	ss)
-		lua $UTIL_SS gen_config -node $node -local_addr $bind -local_port $socks_port -server_host $server_host -server_port $server_port -mode tcp_and_udp > $config_file
+		[ -n "$no_run" ] || {
+			local plugin_sh="${config_file%.json}_plugin.sh"
+			local _extra_param="-plugin_sh $plugin_sh"
+		}
+		lua $UTIL_SS gen_config -node $node -local_addr $bind -local_port $socks_port -server_host $server_host -server_port $server_port -mode tcp_and_udp ${_extra_param} > $config_file
 		[ -n "$no_run" ] || ln_run "$(first_type ss-local)" "ss-local" $log_file -c "$config_file" -v
 	;;
 	ss-rust)
+		local _extra_param
 		[ "$http_port" != "0" ] && {
 			http_flag=1
-			config_file=$(echo $config_file | sed "s/SOCKS/HTTP_SOCKS/g")
-			local _extra_param="-local_http_address $bind -local_http_port $http_port"
+			config_file="${config_file//SOCKS/HTTP_SOCKS}"
+			_extra_param="-local_http_address $bind -local_http_port $http_port"
+		}
+		[ -n "$no_run" ] || {
+			local plugin_sh="${config_file%.json}_plugin.sh"
+			_extra_param="${_extra_param:+$_extra_param }-plugin_sh $plugin_sh"
 		}
 		lua $UTIL_SS gen_config -node $node -local_socks_address $bind -local_socks_port $socks_port -server_host $server_host -server_port $server_port ${_extra_param} > $config_file
 		[ -n "$no_run" ] || ln_run "$(first_type sslocal)" "sslocal" $log_file -c "$config_file" -v
@@ -652,7 +699,7 @@ run_socks() {
 	hysteria2)
 		[ "$http_port" != "0" ] && {
 			http_flag=1
-			config_file=$(echo $config_file | sed "s/SOCKS/HTTP_SOCKS/g")
+			config_file="${config_file//SOCKS/HTTP_SOCKS}"
 			local _extra_param="-local_http_address $bind -local_http_port $http_port"
 		}
 		lua $UTIL_HYSTERIA2 gen_config -node $node -local_socks_address $bind -local_socks_port $socks_port -server_host $server_host -server_port $server_port ${_extra_param} > $config_file
@@ -666,7 +713,7 @@ run_socks() {
 
 	# http to socks
 	[ -z "$http_flag" ] && [ "$http_port" != "0" ] && [ -n "$http_config_file" ] && [ "$type" != "sing-box" ] && [ "$type" != "xray" ] && [ "$type" != "socks" ] && {
-		local bin=$(first_type $(config_t_get global_app singbox_file) sing-box)
+		local bin=$(first_type $(config_t_get global_app sing_box_file) sing-box)
 		if [ -n "$bin" ]; then
 			type="sing-box"
 			lua $UTIL_SINGBOX gen_proto_config -local_http_port $http_port -server_proto socks -server_address "127.0.0.1" -server_port $socks_port -server_username $_username -server_password $_password > $http_config_file
@@ -688,9 +735,17 @@ socks_node_switch() {
 	local flag new_node
 	eval_set_val $@
 	[ -n "$flag" ] && [ -n "$new_node" ] && {
+		local prefix pf filename
+		# Kill the SS plugin process
+		for prefix in "" "HTTP_"; do
+			pf="$TMP_PATH/${prefix}SOCKS_${flag}_plugin.pid"
+			[ -s "$pf" ] && kill -9 "$(head -n1 "$pf")" >/dev/null 2>&1
+		done
+
 		pgrep -af "$TMP_BIN_PATH" | awk -v P1="${flag}" 'BEGIN{IGNORECASE=1}$0~P1 && !/acl\/|acl_/{print $1}' | xargs kill -9 >/dev/null 2>&1
-		rm -rf $TMP_PATH/SOCKS_${flag}*
-		rm -rf $TMP_PATH/HTTP2SOCKS_${flag}*
+		for prefix in "" "HTTP_" "HTTP2"; do
+			rm -rf "$TMP_PATH/${prefix}SOCKS_${flag}"*
+		done
 
 		for filename in $(ls ${TMP_SCRIPT_FUNC_PATH}); do
 			cmd=$(cat ${TMP_SCRIPT_FUNC_PATH}/${filename})
@@ -721,7 +776,7 @@ run_global() {
 	mkdir -p ${GLOBAL_ACL_PATH}
 
 	if [ $PROXY_IPV6 == "1" ]; then
-		echolog "开启实验性IPv6透明代理(TProxy)，请确认您的节点及类型支持IPv6！"
+		log_i18n 0 "To enable experimental IPv6 transparent proxy (TProxy), please ensure your node and type support IPv6!"
 	fi
 
 	TUN_DNS_PORT=15353
@@ -729,23 +784,23 @@ run_global() {
 
 	V2RAY_ARGS="flag=global node=$NODE redir_port=$REDIR_PORT tcp_proxy_way=${TCP_PROXY_WAY}"
 	V2RAY_ARGS="${V2RAY_ARGS} dns_listen_port=${TUN_DNS_PORT} direct_dns_query_strategy=${DIRECT_DNS_QUERY_STRATEGY} remote_dns_query_strategy=${REMOTE_DNS_QUERY_STRATEGY} dns_cache=${DNS_CACHE}"
-	local msg="${TUN_DNS} （直连DNS：${AUTO_DNS}"
+	local msg="DNS: ${TUN_DNS} （$(i18n "Direct DNS: %s" "${AUTO_DNS}")"
 
 	[ -n "$REMOTE_DNS_PROTOCOL" ] && {
 		V2RAY_ARGS="${V2RAY_ARGS} remote_dns_protocol=${REMOTE_DNS_PROTOCOL} remote_dns_detour=${REMOTE_DNS_DETOUR}"
 		case "$REMOTE_DNS_PROTOCOL" in
 			udp*)
 				V2RAY_ARGS="${V2RAY_ARGS} remote_dns_udp_server=${REMOTE_DNS}"
-				msg="${msg} 远程DNS：${REMOTE_DNS}"
+				msg="${msg} $(i18n "Remote DNS: %s" "${REMOTE_DNS}")"
 			;;
 			tcp)
 				V2RAY_ARGS="${V2RAY_ARGS} remote_dns_tcp_server=${REMOTE_DNS}"
-				msg="${msg} 远程DNS：${REMOTE_DNS}"
+				msg="${msg} $(i18n "Remote DNS: %s" "${REMOTE_DNS}")"
 			;;
 			doh)
 				REMOTE_DNS_DOH=$(config_t_get global remote_dns_doh "https://1.1.1.1/dns-query")
 				V2RAY_ARGS="${V2RAY_ARGS} remote_dns_doh=${REMOTE_DNS_DOH}"
-				msg="${msg} 远程DNS：${REMOTE_DNS_DOH}"
+				msg="${msg} $(i18n "Remote DNS: %s" "${REMOTE_DNS_DOH}")"
 			;;
 		esac
 		[ "$REMOTE_FAKEDNS" = "1" ] && {
@@ -757,7 +812,7 @@ run_global() {
 		[ -n "${_remote_dns_client_ip}" ] && V2RAY_ARGS="${V2RAY_ARGS} remote_dns_client_ip=${_remote_dns_client_ip}"
 	}
 	msg="${msg}）"
-	echolog ${msg}
+	log 0 ${msg}
 
 	V2RAY_CONFIG=${GLOBAL_ACL_PATH}/global.json
 	V2RAY_LOG=${GLOBAL_ACL_PATH}/global.log
@@ -829,7 +884,7 @@ start_socks() {
 	[ "$SOCKS_ENABLED" = "1" ] && {
 		local ids=$(uci show $CONFIG | grep "=socks" | awk -F '.' '{print $2}' | awk -F '=' '{print $1}')
 		[ -n "$ids" ] && {
-			echolog "分析 Socks 服务的节点配置..."
+			log_i18n 0 "Analyzing the node configuration of the Socks service..."
 			for id in $ids; do
 				local enabled=$(config_n_get $id enabled 0)
 				[ "$enabled" == "0" ] && continue
@@ -848,7 +903,7 @@ start_socks() {
 				run_socks flag=$id node=$node bind=$bind socks_port=$port config_file=$config_file http_port=$http_port http_config_file=$http_config_file log_file=$log_file
 				set_cache_var "socks_${id}" "$node"
 
-				#自动切换逻辑
+				# Auto switch logic
 				local enable_autoswitch=$(config_n_get $id enable_autoswitch 0)
 				[ "$enable_autoswitch" = "1" ] && $APP_PATH/socks_auto_switch.sh ${id} > /dev/null 2>&1 &
 			done
@@ -860,7 +915,7 @@ clean_log() {
 	logsnum=$(cat $LOG_FILE 2>/dev/null | wc -l)
 	[ "$logsnum" -gt 1000 ] && {
 		echo "" > $LOG_FILE
-		echolog "日志文件过长，清空处理！"
+		log_i18n 0 "Log file is too long, clear it!"
 	}
 }
 
@@ -884,7 +939,7 @@ start_crontab() {
 
 	[ -f "/tmp/lock/${CONFIG}_cron.lock" ] && {
 		rm -rf "/tmp/lock/${CONFIG}_cron.lock"
-		echolog "当前为计划任务自动运行，不重新配置定时任务。"
+		log_i18n 0 "The task is currently running automatically as a scheduled task; no reconfiguration of the scheduled task is required."
 		return
 	}
 
@@ -905,7 +960,7 @@ start_crontab() {
 		else
 			echo "$t /etc/init.d/$CONFIG stop > /dev/null 2>&1 &" >>/etc/crontabs/root
 		fi
-		echolog "配置定时任务：自动关闭服务。"
+		log_i18n 0 "Scheduled tasks: Auto stop service."
 	fi
 
 	start_week_mode=$(config_t_get global_delay start_week_mode)
@@ -918,7 +973,7 @@ start_crontab() {
 		else
 			echo "$t /etc/init.d/$CONFIG start > /dev/null 2>&1 &" >>/etc/crontabs/root
 		fi
-		echolog "配置定时任务：自动开启服务。"
+		log_i18n 0 "Scheduled tasks: Auto start service."
 	fi
 
 	restart_week_mode=$(config_t_get global_delay restart_week_mode)
@@ -931,7 +986,7 @@ start_crontab() {
 		else
 			echo "$t /etc/init.d/$CONFIG restart > /dev/null 2>&1 &" >>/etc/crontabs/root
 		fi
-		echolog "配置定时任务：自动重启服务。"
+		log_i18n 0 "Scheduled tasks: Auto restart service."
 	fi
 
 	autoupdate=$(config_t_get global_rules auto_update)
@@ -945,7 +1000,7 @@ start_crontab() {
 		else
 			echo "$t lua $APP_PATH/rule_update.lua log all cron > /dev/null 2>&1 &" >>/etc/crontabs/root
 		fi
-		echolog "配置定时任务：自动更新规则。"
+		log_i18n 0 "Scheduled tasks: Auto update rules."
 	fi
 
 	TMP_SUB_PATH=$TMP_PATH/sub_crontabs
@@ -957,7 +1012,7 @@ start_crontab() {
 			week_update=$(config_n_get $item week_update)
 			time_update=$(config_n_get $item time_update)
 			echo "$cfgid" >> $TMP_SUB_PATH/${week_update}_${time_update}
-			echolog "配置定时任务：自动更新【$remark】订阅。"
+			log_i18n 0 "Scheduled tasks: Auto update [%s] subscription." "${remark}"
 		fi
 	done
 
@@ -980,10 +1035,10 @@ start_crontab() {
 	if [ "$ENABLED_DEFAULT_ACL" == 1 ] || [ "$ENABLED_ACLS" == 1 ]; then
 		[ "$update_loop" = "1" ] && {
 			$APP_PATH/tasks.sh > /dev/null 2>&1 &
-			echolog "自动更新：启动循环更新进程。"
+			log_i18n 0 "Auto updates: Starts a cyclical update process."
 		}
 	else
-		echolog "运行于非代理模式，仅允许服务启停的定时任务。"
+		log_i18n 0 "Running in no proxy mode, it only allows scheduled tasks for starting and stopping services."
 	fi
 
 	/etc/init.d/cron restart
@@ -993,13 +1048,13 @@ stop_crontab() {
 	[ -f "/tmp/lock/${CONFIG}_cron.lock" ] && return
 	clean_crontab
 	/etc/init.d/cron restart
-	#echolog "清除定时执行命令。"
+	#log_i18n 0 "Clear scheduled commands."
 }
 
 add_ip2route() {
 	local ip=$(get_host_ip "ipv4" $1)
 	[ -z "$ip" ] && {
-		echolog "  - 无法解析[${1}]，路由表添加失败！"
+		log 1 "$(i18n "Unable to resolve [%s], route table addition failed!" "${1}")"
 		return 1
 	}
 	local remarks="${1}"
@@ -1014,9 +1069,9 @@ add_ip2route() {
 	if [ -n "${gateway}" ]; then
 		route add -host ${ip} gw ${gateway} dev ${device} >/dev/null 2>&1
 		echo "$ip" >> $TMP_ROUTE_PATH/${device}
-		echolog "  - [${remarks}]添加到接口[${device}]路由表成功！"
+		log 1 "$(i18n "[%s] was successfully added to the routing table of interface [%s]!" "${remarks}" "${device}")"
 	else
-		echolog "  - [${remarks}]添加到接口[${device}]路由表失功！原因是找不到[${device}]网关。"
+		log 1 "$(i18n "Adding [%s] to the [%s] routing table failed! The reason is that the [%s] gateway cannot be found." "${remarks}" "${device}" "${device}")"
 	fi
 }
 
@@ -1100,6 +1155,7 @@ run_ipset_dnsmasq() {
 		port=${listen_port}
 		no-poll
 		no-resolv
+		strict-order
 		cache-size=${cache_size:-0}
 		dns-forward-max=${dns_forward_max:-1000}
 	EOF
@@ -1129,10 +1185,9 @@ acl_app() {
 			index=$(expr $index + 1)
 			local enabled sid remarks sources interface tcp_no_redir_ports udp_no_redir_ports node direct_dns_query_strategy write_ipset_direct remote_dns_protocol remote_dns remote_dns_doh remote_dns_client_ip remote_dns_detour remote_fakedns remote_dns_query_strategy
 			local _ip _mac _iprange _ipset _ip_or_mac source_list config_file
-			sid=$(uci -q show "${CONFIG}.${item}" | grep "=acl_rule" | awk -F '=' '{print $1}' | awk -F '.' '{print $2}')
+			local sid=$(uci -q show "${CONFIG}.${item}" | grep "=acl_rule" | awk -F '=' '{print $1}' | awk -F '.' '{print $2}')
+			[ "$(config_n_get $sid enabled)" = "1" ] || continue
 			eval $(uci -q show "${CONFIG}.${item}" | cut -d'.' -sf 3-)
-
-			[ "$enabled" = "1" ] || continue
 
 			if [ -n "${sources}" ]; then
 				for s in $sources; do
@@ -1166,7 +1221,9 @@ acl_app() {
 			udp_no_redir_ports=${udp_no_redir_ports:-default}
 			[ "$tcp_no_redir_ports" = "default" ] && tcp_no_redir_ports=$TCP_NO_REDIR_PORTS
 			[ "$udp_no_redir_ports" = "default" ] && udp_no_redir_ports=$UDP_NO_REDIR_PORTS
-			[ "$tcp_no_redir_ports" == "1:65535" ] && [ "$udp_no_redir_ports" == "1:65535" ] && unset node
+			if has_1_65535 "$tcp_no_redir_ports" && has_1_65535 "$udp_no_redir_ports"; then
+				unset node
+			fi
 
 			[ -n "$node" ] && {
 				tcp_proxy_mode="global"
@@ -1190,7 +1247,7 @@ acl_app() {
 						set_cache_var "ACL_${sid}_dns_port" "${GLOBAL_DNSMASQ_PORT}"
 						set_cache_var "ACL_${sid}_default" "1"
 					else
-						echolog "  - 全局节点未启用，跳过【${remarks}】"
+						log 1 "$(i18n "Global nodes are not enabled, skip [%s]." "${remarks}")"
 					fi
 				else
 					[ "$(config_get_type $node)" = "nodes" ] && {
@@ -1237,10 +1294,10 @@ acl_app() {
 
 start() {
 	pgrep -f /tmp/etc/passwall2/bin > /dev/null 2>&1 && {
-		#echolog "程序已启动，先停止再重新启动!"
+		#log_i18n 0 "The program has started. Please stop it and then restart it!"
 		stop
 	}
-	mkdir -p /tmp/etc $TMP_PATH $TMP_BIN_PATH $TMP_SCRIPT_FUNC_PATH $TMP_ROUTE_PATH $TMP_ACL_PATH $TMP_PATH2
+	mkdir -p /tmp/etc /tmp/log $TMP_PATH $TMP_BIN_PATH $TMP_SCRIPT_FUNC_PATH $TMP_ROUTE_PATH $TMP_ACL_PATH $TMP_PATH2
 	get_config
 	export V2RAY_LOCATION_ASSET=$(config_t_get global_rules v2ray_location_asset "/usr/share/v2ray/")
 	export XRAY_LOCATION_ASSET=$V2RAY_LOCATION_ASSET
@@ -1256,9 +1313,9 @@ start() {
 		if [ -n "$(command -v iptables-legacy || command -v iptables)" ] && [ -n "$(command -v ipset)" ] && [ -n "$(dnsmasq --version | grep 'Compile time options:.* ipset')" ]; then
 			USE_TABLES="iptables"
 		else
-			echolog "系统未安装iptables或ipset或Dnsmasq没有开启ipset支持，无法使用iptables+ipset透明代理！"
+			log_i18n 0 "The system does not have iptables or ipset installed, or Dnsmasq does not have ipset support enabled, so iptables+ipset transparent proxy cannot be used!"
 			if [ -n "$(command -v fw4)" ] && [ -n "$(command -v nft)" ] && [ -n "$(dnsmasq --version | grep 'Compile time options:.* nftset')" ]; then
-				echolog "检测到fw4，使用nftables进行透明代理。"
+				log_i18n 0 "fw4 detected, use nftables to transparent proxy."
 				USE_TABLES="nftables"
 				nftflag=1
 				config_t_set global_forwarding use_nft 1
@@ -1270,7 +1327,7 @@ start() {
 			USE_TABLES="nftables"
 			nftflag=1
 		else
-			echolog "Dnsmasq软件包不满足nftables透明代理要求，如需使用请确保dnsmasq版本在2.87以上并开启nftset支持。"
+			log_i18n 0 "The Dnsmasq package does not meet the requirements for transparent proxy in nftables. If you need to use it, please ensure that the dnsmasq version is 2.87 or higher and that nftset support is enabled."
 		fi
 	fi
 
@@ -1278,7 +1335,7 @@ start() {
 	
 	[ "$USE_TABLES" = "nftables" ] && {
 		dnsmasq_version=$(dnsmasq -v | grep -i "Dnsmasq version " | awk '{print $3}')
-		[ "$(expr $dnsmasq_version \>= 2.90)" == 0 ] && echolog "Dnsmasq版本低于2.90，建议升级至2.90及以上版本以避免部分情况下Dnsmasq崩溃问题！"
+		[ "$(expr $dnsmasq_version \>= 2.90)" == 0 ] && log_i18n 0 "If your Dnsmasq version is lower than 2.90, it is recommended to upgrade to version 2.90 or higher to avoid Dnsmasq crashing in some cases!"
 	}
 
 	if [ "$ENABLED_DEFAULT_ACL" == 1 ] || [ "$ENABLED_ACLS" == 1 ]; then
@@ -1304,7 +1361,8 @@ start() {
 		}
 	fi
 	start_crontab
-	echolog "运行完成！\n"
+	log_i18n 0 "Running complete!"
+	echolog "\n"
 }
 
 stop() {
@@ -1312,7 +1370,15 @@ stop() {
 	eval_cache_var
 	[ -n "$USE_TABLES" ] && source $APP_PATH/${USE_TABLES}.sh stop
 	delete_ip2route
-	kill_all v2ray-plugin obfs-local
+	# Kill the SS plugin process
+	# kill_all xray-plugin v2ray-plugin obfs-local shadow-tls
+	local pid_file pid
+	find "$TMP_PATH" -type f -name '*_plugin.pid' 2>/dev/null | while read -r pid_file; do
+		read -r pid < "$pid_file"
+		if [ -n "$pid" ]; then
+			kill -9 "$pid" >/dev/null 2>&1
+		fi
+	done
 	pgrep -f "sleep.*(6s|9s|58s)" | xargs kill -9 >/dev/null 2>&1
 	pgrep -af "${CONFIG}/" | awk '! /app\.sh|subscribe\.lua|rule_update\.lua|tasks\.sh|ujail/{print $1}' | xargs kill -9 >/dev/null 2>&1
 	unset V2RAY_LOCATION_ASSET
@@ -1340,7 +1406,7 @@ stop() {
 	rm -rf $TMP_PATH
 	rm -rf /tmp/lock/${CONFIG}_socks_auto_switch*
 	rm -rf /tmp/lock/${CONFIG}_lease2hosts*
-	echolog "清空并关闭相关程序和缓存完成。"
+	log_i18n 0 "Clearing and closing related programs and cache complete."
 	exit 0
 }
 
@@ -1380,8 +1446,8 @@ get_config() {
 	RESOLVFILE=/tmp/resolv.conf.d/resolv.conf.auto
 	[ -f "${RESOLVFILE}" ] && [ -s "${RESOLVFILE}" ] || RESOLVFILE=/tmp/resolv.conf.auto
 
-	ISP_DNS=$(cat $RESOLVFILE 2>/dev/null | grep -E -o "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | sort -u | grep -v 0.0.0.0 | grep -v 127.0.0.1)
-	ISP_DNS6=$(cat $RESOLVFILE 2>/dev/null | grep -E "([A-Fa-f0-9]{1,4}::?){1,7}[A-Fa-f0-9]{1,4}" | awk -F % '{print $1}' | awk -F " " '{print $2}'| sort -u | grep -v -Fx ::1 | grep -v -Fx ::)
+	ISP_DNS=$(cat $RESOLVFILE 2>/dev/null | grep -E -o "[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | grep -v -E '^(0\.0\.0\.0|127\.0\.0\.1)$' | awk '!seen[$0]++')
+	ISP_DNS6=$(cat $RESOLVFILE 2>/dev/null | grep -E "([A-Fa-f0-9]{1,4}::?){1,7}[A-Fa-f0-9]{1,4}" | awk -F % '{print $1}' | awk -F " " '{print $2}' | grep -v -Fx ::1 | grep -v -Fx :: | awk '!seen[$0]++')
 
 	DEFAULT_DNSMASQ_CFGID=$(uci show dhcp.@dnsmasq[0] |  awk -F '.' '{print $2}' | awk -F '=' '{print $1}'| head -1)
 	DEFAULT_DNS=$(uci show dhcp.@dnsmasq[0] | grep "\.server=" | awk -F '=' '{print $2}' | sed "s/'//g" | tr ' ' '\n' | grep -v "\/" | head -2 | sed ':label;N;s/\n/,/;b label')
@@ -1402,7 +1468,7 @@ get_config() {
 	set_cache_var GLOBAL_DNSMASQ_CONF_PATH ${GLOBAL_ACL_PATH}/dnsmasq.d
 
 	XRAY_BIN=$(first_type $(config_t_get global_app xray_file) xray)
-	SINGBOX_BIN=$(first_type $(config_t_get global_app singbox_file) sing-box)
+	SINGBOX_BIN=$(first_type $(config_t_get global_app sing_box_file) sing-box)
 }
 
 arg1=$1
@@ -1411,8 +1477,14 @@ case $arg1 in
 add_ip2route)
 	add_ip2route $@
 	;;
-echolog)
-	echolog $@
+log)
+	log $@
+	;;
+log_i18n)
+	log_i18n "$@"
+	;;
+i18n)
+	i18n "$@"
 	;;
 get_new_port)
 	get_new_port $@

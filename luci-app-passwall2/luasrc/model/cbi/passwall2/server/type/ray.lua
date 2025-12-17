@@ -19,7 +19,7 @@ local x_ss_method_list = {
 }
 
 local header_type_list = {
-	"none", "srtp", "utp", "wechat-video", "dtls", "wireguard"
+	"none", "srtp", "utp", "wechat-video", "dtls", "wireguard", "dns"
 }
 
 -- [[ Xray ]]
@@ -80,9 +80,14 @@ o = s:option(Value, _n("d_port"), translate("Destination port"))
 o.datatype = "port"
 o:depends({ [_n("protocol")] = "dokodemo-door" })
 
-o = s:option(Value, _n("decryption"), translate("Encrypt Method"))
+o = s:option(Value, _n("decryption"), translate("Encrypt Method") .. " (decryption)")
 o.default = "none"
+o.placeholder = "none"
 o:depends({ [_n("protocol")] = "vless" })
+o.validate = function(self, value)
+	value = api.trim(value)
+	return (value == "" and "none" or value)
+end
 
 o = s:option(ListValue, _n("x_ss_method"), translate("Encrypt Method"))
 o.rewrite_option = "method"
@@ -117,6 +122,7 @@ o.default = ""
 o:value("", translate("Disable"))
 o:value("xtls-rprx-vision")
 o:depends({ [_n("protocol")] = "vless", [_n("tls")] = true, [_n("transport")] = "raw" })
+o:depends({ [_n("protocol")] = "vless", [_n("tls")] = true, [_n("transport")] = "xhttp" })
 
 o = s:option(Flag, _n("tls"), translate("TLS"))
 o.default = 0
@@ -141,7 +147,7 @@ o:depends({ [_n("protocol")] = "socks" })
 o:depends({ [_n("protocol")] = "shadowsocks" })
 o:depends({ [_n("protocol")] = "trojan" })
 
--- [[ REALITY部分 ]] --
+-- [[ REALITY ]] --
 o = s:option(Flag, _n("reality"), translate("REALITY"))
 o.default = 0
 o:depends({ [_n("tls")] = true })
@@ -179,20 +185,33 @@ end
 
 o = s:option(ListValue, _n("alpn"), translate("alpn"))
 o.default = "h2,http/1.1"
-o:value("h3,h2,http/1.1")
-o:value("h3,h2")
-o:value("h2,http/1.1")
 o:value("h3")
 o:value("h2")
+o:value("h3,h2")
 o:value("http/1.1")
-o:depends({ [_n("tls")] = true })
+o:value("h2,http/1.1")
+o:value("h3,h2,http/1.1")
+o:depends({ [_n("tls")] = true, [_n("reality")] = false })
+
+o = s:option(Flag, _n("use_mldsa65Seed"), translate("ML-DSA-65"))
+o.default = "0"
+o:depends({ [_n("reality")] = true })
+
+o = s:option(TextValue, _n("reality_mldsa65Seed"), "ML-DSA-65 " .. translate("Private Key"))
+o.default = ""
+o.rows = 5
+o.wrap = "soft"
+o:depends({ [_n("use_mldsa65Seed")] = true })
+o.validate = function(self, value)
+	return api.trim(value:gsub("[\r\n]", ""))
+end
 
 -- o = s:option(Value, _n("minversion"), translate("minversion"))
 -- o.default = "1.3"
 -- o:value("1.3")
 --o:depends({ [_n("tls")] = true })
 
--- [[ TLS部分 ]] --
+-- [[ TLS ]] --
 o = s:option(FileUpload, _n("tls_certificateFile"), translate("Public key absolute path"), translate("as:") .. "/etc/ssl/fullchain.pem")
 o.default = m:get(s.section, "tls_certificateFile") or "/etc/config/ssl/" .. arg[1] .. ".pem"
 if o and o:formvalue(arg[1]) then o.default = o:formvalue(arg[1]) end
@@ -223,12 +242,23 @@ o.validate = function(self, value, t)
 	return nil
 end
 
+o = s:option(Flag, _n("ech"), translate("ECH"))
+o.default = "0"
+o:depends({ [_n("tls")] = true, [_n("flow")] = "", [_n("reality")] = false })
+
+o = s:option(TextValue, _n("ech_key"), translate("ECH Key"))
+o.default = ""
+o.rows = 5
+o.wrap = "soft"
+o:depends({ [_n("ech")] = true })
+o.validate = function(self, value)
+	return api.trim(value:gsub("[\r\n]", ""))
+end
+
 o = s:option(ListValue, _n("transport"), translate("Transport"))
 o:value("raw", "RAW")
 o:value("mkcp", "mKCP")
 o:value("ws", "WebSocket")
-o:value("ds", "DomainSocket")
-o:value("quic", "QUIC")
 o:value("grpc", "gRPC")
 o:value("httpupgrade", "HttpUpgrade")
 o:value("xhttp", "XHTTP")
@@ -238,14 +268,14 @@ o:depends({ [_n("protocol")] = "socks" })
 o:depends({ [_n("protocol")] = "shadowsocks" })
 o:depends({ [_n("protocol")] = "trojan" })
 
--- [[ WebSocket部分 ]]--
+-- [[ WebSocket ]]--
 o = s:option(Value, _n("ws_host"), translate("WebSocket Host"))
 o:depends({ [_n("transport")] = "ws" })
 
 o = s:option(Value, _n("ws_path"), translate("WebSocket Path"))
 o:depends({ [_n("transport")] = "ws" })
 
--- [[ HttpUpgrade部分 ]]--
+-- [[ HttpUpgrade ]]--
 o = s:option(Value, _n("httpupgrade_host"), translate("HttpUpgrade Host"))
 o:depends({ [_n("transport")] = "httpupgrade" })
 
@@ -253,7 +283,7 @@ o = s:option(Value, _n("httpupgrade_path"), translate("HttpUpgrade Path"))
 o.placeholder = "/"
 o:depends({ [_n("transport")] = "httpupgrade" })
 
--- [[ SplitHTTP部分 ]]--
+-- [[ XHTTP ]]--
 o = s:option(Value, _n("xhttp_host"), translate("XHTTP Host"))
 o:depends({ [_n("transport")] = "xhttp" })
 
@@ -277,26 +307,27 @@ o = s:option(Value, _n("splithttp_maxconcurrentuploads"), translate("maxConcurre
 o.default = "10"
 o:depends({ [_n("transport")] = "splithttp" })
 
--- [[ TCP部分 ]]--
+-- [[ TCP ]]--
 
--- TCP伪装
 o = s:option(ListValue, _n("tcp_guise"), translate("Camouflage Type"))
 o:value("none", "none")
 o:value("http", "http")
 o:depends({ [_n("transport")] = "raw" })
 
--- HTTP域名
 o = s:option(DynamicList, _n("tcp_guise_http_host"), translate("HTTP Host"))
 o:depends({ [_n("tcp_guise")] = "http" })
 
--- HTTP路径
 o = s:option(DynamicList, _n("tcp_guise_http_path"), translate("HTTP Path"))
 o:depends({ [_n("tcp_guise")] = "http" })
 
--- [[ mKCP部分 ]]--
-o = s:option(ListValue, _n("mkcp_guise"), translate("Camouflage Type"), translate('<br />none: default, no masquerade, data sent is packets with no characteristics.<br />srtp: disguised as an SRTP packet, it will be recognized as video call data (such as FaceTime).<br />utp: packets disguised as uTP will be recognized as bittorrent downloaded data.<br />wechat-video: packets disguised as WeChat video calls.<br />dtls: disguised as DTLS 1.2 packet.<br />wireguard: disguised as a WireGuard packet. (not really WireGuard protocol)'))
+-- [[ mKCP ]]--
+
+o = s:option(ListValue, _n("mkcp_guise"), translate("Camouflage Type"), translate('<br />none: default, no masquerade, data sent is packets with no characteristics.<br />srtp: disguised as an SRTP packet, it will be recognized as video call data (such as FaceTime).<br />utp: packets disguised as uTP will be recognized as bittorrent downloaded data.<br />wechat-video: packets disguised as WeChat video calls.<br />dtls: disguised as DTLS 1.2 packet.<br />wireguard: disguised as a WireGuard packet. (not really WireGuard protocol)<br />dns: Disguising traffic as DNS requests.'))
 for a, t in ipairs(header_type_list) do o:value(t) end
 o:depends({ [_n("transport")] = "mkcp" })
+
+o = s:option(Value, _n("mkcp_domain"), translate("Camouflage Domain"), translate("Use it together with the DNS disguised type. You can fill in any domain."))
+o:depends({ [_n("mkcp_guise")] = "dns" })
 
 o = s:option(Value, _n("mkcp_mtu"), translate("KCP MTU"))
 o.default = "1350"
@@ -328,25 +359,7 @@ o:depends({ [_n("transport")] = "mkcp" })
 o = s:option(Value, _n("mkcp_seed"), translate("KCP Seed"))
 o:depends({ [_n("transport")] = "mkcp" })
 
--- [[ DomainSocket部分 ]]--
-o = s:option(Value, _n("ds_path"), "Path", translate("A legal file path. This file must not exist before running."))
-o:depends({ [_n("transport")] = "ds" })
-
--- [[ QUIC部分 ]]--
-o = s:option(ListValue, _n("quic_security"), translate("Encrypt Method"))
-o:value("none")
-o:value("aes-128-gcm")
-o:value("chacha20-poly1305")
-o:depends({ [_n("transport")] = "quic" })
-
-o = s:option(Value, _n("quic_key"), translate("Encrypt Method") .. translate("Key"))
-o:depends({ [_n("transport")] = "quic" })
-
-o = s:option(ListValue, _n("quic_guise"), translate("Camouflage Type"))
-for a, t in ipairs(header_type_list) do o:value(t) end
-o:depends({ [_n("transport")] = "quic" })
-
--- [[ gRPC部分 ]]--
+-- [[ gRPC ]]--
 o = s:option(Value, _n("grpc_serviceName"), "ServiceName")
 o:depends({ [_n("transport")] = "grpc" })
 
@@ -354,7 +367,7 @@ o = s:option(Flag, _n("acceptProxyProtocol"), translate("acceptProxyProtocol"), 
 o.default = "0"
 o:depends({ [_n("custom")] = false })
 
--- [[ Fallback部分 ]]--
+-- [[ Fallback ]]--
 o = s:option(Flag, _n("fallback"), translate("Fallback"))
 o:depends({ [_n("protocol")] = "vless", [_n("transport")] = "raw" })
 o:depends({ [_n("protocol")] = "trojan", [_n("transport")] = "raw" })
